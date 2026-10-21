@@ -75,6 +75,16 @@ h1 b{color:var(--blue)}
 .chart-box{position:relative;height:320px}
 @media (max-width:560px){.chart-box{height:260px}}
 
+/* Roscas */
+.donut-row{display:grid;grid-template-columns:200px minmax(0,1fr);gap:20px;align-items:center}
+@media (max-width:520px){.donut-row{grid-template-columns:minmax(0,1fr)}}
+.donut{position:relative;width:200px;height:200px;margin:0 auto}
+.donut canvas{position:relative;z-index:1}
+.donut .center{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;pointer-events:none}
+.donut .center small{font-family:var(--display);font-size:10px;letter-spacing:1.2px;text-transform:uppercase;color:var(--muted)}
+.donut .center strong{font-family:var(--display);font-weight:800;font-size:19px;font-variant-numeric:tabular-nums}
+.legend-note{font-size:12px;color:var(--faint);margin-top:10px}
+
 /* Categorias */
 .cats{display:flex;flex-direction:column;gap:12px}
 .cat{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 12px;align-items:center}
@@ -186,11 +196,11 @@ td.date{white-space:nowrap;color:var(--muted);font-variant-numeric:tabular-nums}
     <div class="grid g2" style="margin-top:16px">
       <div class="panel">
         <div class="ph"><h2><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 3v9l6 4"/></svg></span>Para onde foi o dinheiro</h2></div>
-        <div class="cats" id="catsGeral"></div>
+        <div class="donut-row"><div class="donut"><canvas id="donutCats" aria-label="Gráfico de rosca dos gastos por categoria"></canvas><div class="center"><small>Já saiu</small><strong id="dcTot">–</strong></div></div><div class="cats" id="catsGeral"></div></div>
       </div>
       <div class="panel">
         <div class="ph"><h2><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7h18v12H3zM16 13h2"/><path d="M3 7l3-4h12l3 4"/></svg></span>De onde veio o dinheiro</h2></div>
-        <div class="cats" id="origGeral"></div>
+        <div class="donut-row"><div class="donut"><canvas id="donutOrig" aria-label="Gráfico de rosca das entradas por origem"></canvas><div class="center"><small>Já entrou</small><strong id="doTot">–</strong></div></div><div class="cats" id="origGeral"></div></div>
       </div>
     </div>
   </section>
@@ -209,7 +219,7 @@ td.date{white-space:nowrap;color:var(--muted);font-variant-numeric:tabular-nums}
     <div class="grid g2" style="margin-top:16px">
       <div class="panel">
         <div class="ph"><h2><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h10M4 18h6"/></svg></span>Gastos do mês por categoria</h2></div>
-        <div class="cats" id="catsMes"></div>
+        <div class="donut-row"><div class="donut"><canvas id="donutMes" aria-label="Gráfico de rosca dos gastos do mês"></canvas><div class="center"><small>Saiu no mês</small><strong id="dmTot">–</strong></div></div><div class="cats" id="catsMes"></div></div>
       </div>
       <div class="panel">
         <div class="ph"><h2><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12l7-7 7 7"/></svg></span>Entradas do mês</h2></div>
@@ -437,10 +447,13 @@ td.date{white-space:nowrap;color:var(--muted);font-variant-numeric:tabular-nums}
     // categorias (pago)
     const porCat = {};
     for (const g of D.gastos){ porCat[g.cat] = porCat[g.cat] || {pago:0, falta:0}; porCat[g.cat].pago += g.pago; porCat[g.cat].falta += g.falta; }
-    $('catsGeral').innerHTML = barras(Object.entries(porCat).map(([k,v]) => [k, v.pago]), CAT_COLORS);
+    const paresCat = Object.entries(porCat).map(([k,v]) => [k, v.pago]);
+    $('catsGeral').innerHTML = barras(paresCat, CAT_COLORS);
+    drawDonut('donutCats', paresCat, CAT_COLORS, 'dcTot', saiu);
     const porOrig = {};
     for (const e of D.entradas){ porOrig[e.orig] = (porOrig[e.orig] || 0) + e.rec; }
     $('origGeral').innerHTML = barras(Object.entries(porOrig), ORIG_COLORS);
+    drawDonut('donutOrig', Object.entries(porOrig), ORIG_COLORS, 'doTot', entrou);
 
     // mensal
     if (mesSel === null || !meses.includes(mesSel)) mesSel = meses.includes(hoje) ? hoje : meses[meses.length - 1];
@@ -462,24 +475,63 @@ td.date{white-space:nowrap;color:var(--muted);font-variant-numeric:tabular-nums}
     }).join('');
   }
 
+  // Degradê vertical que acompanha a área do gráfico
+  function grad(c0, c1, faded){
+    return ctx => {
+      const {chart: ch} = ctx; const a = ch.chartArea; if (!a) return c0;
+      const g = ch.ctx.createLinearGradient(0, a.top, 0, a.bottom);
+      g.addColorStop(0, faded ? c0 + '55' : c0); g.addColorStop(1, faded ? c1 + '22' : c1);
+      return g;
+    };
+  }
   function drawChart(serie, hoje){
     if (!window.Chart) return;
     const css = getComputedStyle(document.documentElement);
     const muted = css.getPropertyValue('--muted').trim(), line = css.getPropertyValue('--line').trim();
+    const fut = i => serie[i] && serie[i].m > hoje;
     const data = {
       labels: serie.map(s => idxLabel(s.m)),
       datasets: [
-        {type:'bar', label:'Entradas', data: serie.map(s => s.i), backgroundColor: serie.map(s => s.m > hoje ? 'rgba(46,153,255,.35)' : '#2E99FF'), borderRadius:6, order:2},
-        {type:'bar', label:'Gastos', data: serie.map(s => s.o), backgroundColor: serie.map(s => s.m > hoje ? 'rgba(255,122,107,.35)' : '#FF7A6B'), borderRadius:6, order:2},
-        {type:'line', label:'Saldo acumulado', data: serie.map(s => s.acum), borderColor:'#EAF0FF', backgroundColor:'#EAF0FF', borderWidth:2, pointRadius:3, tension:.3, order:1}
+        {type:'bar', label:'Entradas', data: serie.map(s => s.i), backgroundColor: c => grad('#5FB2FF', '#1D5FD0', fut(c.dataIndex))(c), borderRadius:{topLeft:10, topRight:10}, borderSkipped:'bottom', maxBarThickness:34, order:2},
+        {type:'bar', label:'Gastos', data: serie.map(s => s.o), backgroundColor: c => grad('#FF9A8C', '#D9473A', fut(c.dataIndex))(c), borderRadius:{topLeft:10, topRight:10}, borderSkipped:'bottom', maxBarThickness:34, order:2},
+        {type:'line', label:'Saldo acumulado', yAxisID:'y1', data: serie.map(s => s.acum), borderColor:'#B9DCFF', backgroundColor:'#B9DCFF', borderWidth:3, tension:.4, order:1,
+          pointRadius:4, pointHoverRadius:7, pointBackgroundColor:'#050B24', pointBorderColor:'#B9DCFF', pointBorderWidth:2,
+          segment:{borderDash: c => fut(c.p1DataIndex) ? [6,6] : undefined},
+          fill:false}
       ]
     };
     const opts = {
       responsive:true, maintainAspectRatio:false, interaction:{mode:'index', intersect:false},
-      plugins:{legend:{labels:{color:muted, usePointStyle:true, boxWidth:8}}, tooltip:{callbacks:{label: c => c.dataset.label + ': ' + brl(c.parsed.y)}}},
-      scales:{x:{ticks:{color:muted}, grid:{display:false}}, y:{ticks:{color:muted, callback: v => brl0(v)}, grid:{color:line}}}
+      animation:{duration:900, easing:'easeOutQuart'},
+      plugins:{
+        legend:{position:'bottom', labels:{color:muted, usePointStyle:true, pointStyle:'rectRounded', boxWidth:10, padding:18, font:{family:'Figtree', weight:'600'},
+          generateLabels: ch => ch.data.datasets.map((d, i) => ({text:d.label, fillStyle:['#2E99FF','#FF7A6B','#B9DCFF'][i], strokeStyle:['#2E99FF','#FF7A6B','#B9DCFF'][i], fontColor:muted, pointStyle:'rectRounded', hidden:!ch.isDatasetVisible(i), datasetIndex:i}))}},
+        tooltip:{backgroundColor:'#0A1538', borderColor:'#2C3C7E', borderWidth:1, padding:12, cornerRadius:10, titleFont:{family:'Exo 2', weight:'700'}, bodyFont:{family:'Figtree'},
+          callbacks:{title: it => it[0].label + (fut(it[0].dataIndex) ? ' (previsto)' : ''), label: c => ' ' + c.dataset.label + ': ' + brl(c.parsed.y)}}
+      },
+      scales:{
+        x:{ticks:{color:muted, font:{family:'Figtree', weight:'600'}}, grid:{display:false}, border:{display:false}},
+        y:{beginAtZero:true, ticks:{color:muted, callback: v => brl0(v), maxTicksLimit:6}, grid:{color:line}, border:{display:false}, title:{display:true, text:'Entradas e gastos', color:muted, font:{size:11}}},
+        y1:{position:'right', ticks:{color:'#B9DCFF', callback: v => brl0(v), maxTicksLimit:6}, grid:{display:false}, border:{display:false}, title:{display:true, text:'Saldo acumulado', color:'#B9DCFF', font:{size:11}}}
+      }
     };
     if (chart){ chart.data = data; chart.update(); } else chart = new Chart($('chartMonths'), {data, options: opts});
+  }
+
+  const donuts = {};
+  function drawDonut(id, pares, cores, centerId, total){
+    $(centerId).textContent = brl0(total);
+    if (!window.Chart) return;
+    const lista = pares.filter(([,v]) => v > 0.004).sort((a,b) => b[1] - a[1]);
+    const data = {
+      labels: lista.map(([k]) => k),
+      datasets:[{data: lista.length ? lista.map(([,v]) => v) : [1], backgroundColor: lista.length ? lista.map(([k]) => cores[k] || '#9AA3B5') : ['#13214F'],
+        borderColor:'#0E1A44', borderWidth:3, hoverOffset:10, borderRadius:6, spacing:2}]
+    };
+    const opts = {responsive:true, maintainAspectRatio:false, cutout:'70%', animation:{animateRotate:true, duration:900},
+      plugins:{legend:{display:false}, tooltip:{enabled: lista.length > 0, backgroundColor:'#0A1538', borderColor:'#2C3C7E', borderWidth:1, padding:10, cornerRadius:10,
+        callbacks:{label: c => ' ' + c.label + ': ' + brl(c.parsed) + ' (' + Math.round(c.parsed / (total || 1) * 100) + '%)'}}}};
+    if (donuts[id]){ donuts[id].data = data; donuts[id].update(); } else donuts[id] = new Chart($(id), {type:'doughnut', data, options: opts});
   }
 
   $('monthChips').addEventListener('click', e => {
@@ -496,6 +548,7 @@ td.date{white-space:nowrap;color:var(--muted);font-variant-numeric:tabular-nums}
     $('mRes').textContent = brl(r); $('mRes').className = r < 0 ? 'neg' : 'pos';
     const pc = {}; for (const x of gs) pc[x.it.cat] = (pc[x.it.cat] || 0) + x.valor;
     $('catsMes').innerHTML = barras(Object.entries(pc), CAT_COLORS);
+    drawDonut('donutMes', Object.entries(pc), CAT_COLORS, 'dmTot', o);
     const linha = (x, tipo) => {
       const it = x.it, parc = it.n > 1 ? `<span class="sub">Parcela ${x.k + 1} de ${it.n}</span>` : '';
       const quando = it.n > 1 ? fmtD(new Date(Date.UTC(it.prim.getUTCFullYear(), it.prim.getUTCMonth() + x.k, Math.min(it.prim.getUTCDate(), 28)))) : fmtD(it.data);
